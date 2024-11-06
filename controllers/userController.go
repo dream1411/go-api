@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"learn-api/config"
 	"learn-api/models"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,27 +16,26 @@ import (
 )
 
 // @Summary Get all users
-// @Description Get a list of all users
+// @Description Get a list of all users with pagination
 // @Tags users
 // @Produce json
 // @Param id query int false "User ID"
+// @Param page query int false "Page number"
+// @Param size query int false "Number of items per page"
 // @Param Authorization header string true "Authorization Bearer Token"
 // @Success 200 {array} models.User
 // @Failure 401 {string} string "Unauthorized"
 // @Failure 500 {string} string "Internal Server Error"
 // @Router /api/users [get]
+// GetUsers handles fetching users with optional ID filtering, pagination, and JWT authorization
 func GetUsers(w http.ResponseWriter, r *http.Request) {
-	// ตรวจสอบ Header Authorization
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// ตัดคำว่า "Bearer " ออกและเก็บ token
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-
-	// ตรวจสอบ JWT Token
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return config.JWT_SECRET, nil
 	})
@@ -45,14 +45,14 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ตรวจสอบ query parameter id
 	userIDParam := r.URL.Query().Get("id")
-	query := "SELECT id, username, email FROM user"
+	baseQuery := "SELECT id, username, email, first_name, last_name, user_type_id, branch_id, profile_image_path, createDate, updateDate, status_id, role_id, nickname, phone_number, edit_by, u_index, u_code, permission FROM user"
+	countQuery := "SELECT COUNT(*) FROM user"
 	var args []interface{}
+	var conditions []string
 
-	// เพิ่มเงื่อนไขใน query หากมีการระบุ id
 	if userIDParam != "" {
-		query += " WHERE id = ?"
+		conditions = append(conditions, "id = ?")
 		id, err := strconv.Atoi(userIDParam)
 		if err != nil {
 			http.Error(w, "Invalid ID parameter", http.StatusBadRequest)
@@ -61,8 +61,47 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 	}
 
-	// รัน query
-	rows, err := config.DB.Query(query, args...)
+	if len(conditions) > 0 {
+		baseQuery += " WHERE " + strings.Join(conditions, " AND ")
+		countQuery += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	pageParam := r.URL.Query().Get("page")
+	sizeParam := r.URL.Query().Get("size")
+	page := 1
+	size := 10
+
+	if pageParam != "" {
+		page, err = strconv.Atoi(pageParam)
+		if err != nil || page < 1 {
+			http.Error(w, "Invalid page parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if sizeParam != "" {
+		size, err = strconv.Atoi(sizeParam)
+		if err != nil || size < 1 {
+			http.Error(w, "Invalid size parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	offset := (page - 1) * size
+	baseQuery += " LIMIT ? OFFSET ?"
+	args = append(args, size, offset)
+
+	// คำนวณจำนวนรายการทั้งหมด
+	var totalElements int
+	row := config.DB.QueryRow(countQuery, args[:len(args)-2]...)
+	if err := row.Scan(&totalElements); err != nil {
+		http.Error(w, "Error counting users", http.StatusInternalServerError)
+		return
+	}
+
+	totalPages := (totalElements + size - 1) / size
+
+	rows, err := config.DB.Query(baseQuery, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -72,15 +111,44 @@ func GetUsers(w http.ResponseWriter, r *http.Request) {
 	var users []models.User
 	for rows.Next() {
 		var user models.User
-		if err := rows.Scan(&user.ID, &user.Username, &user.Email); err != nil {
+		var createDate, updateDate []byte
+
+		if err := rows.Scan(
+			&user.ID, &user.Username, &user.Email, &user.FirstName, &user.LastName,
+			&user.UserTypeID, &user.BranchID, &user.ProfileImagePath, &createDate, &updateDate,
+			&user.StatusID, &user.RoleID, &user.Nickname, &user.PhoneNumber, &user.EditBy,
+			&user.UIndex, &user.UCode, &user.Permission,
+		); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		user.CreateDate, err = time.Parse("2006-01-02 15:04:05", string(createDate))
+		if err != nil {
+			log.Printf("Failed to parse createDate: %v", err)
+			http.Error(w, "Error parsing createDate", http.StatusInternalServerError)
+			return
+		}
+
+		user.UpdateDate, err = time.Parse("2006-01-02 15:04:05", string(updateDate))
+		if err != nil {
+			log.Printf("Failed to parse updateDate: %v", err)
+			http.Error(w, "Error parsing updateDate", http.StatusInternalServerError)
+			return
+		}
+
 		users = append(users, user)
 	}
 
+	response := map[string]interface{}{
+		"totalPages":    totalPages,
+		"totalElements": totalElements,
+		"currentPage":   page,
+		"content":       users,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(response)
 }
 
 // Login handles user login
@@ -105,8 +173,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user models.User
-	err := config.DB.QueryRow("SELECT id, username, password FROM user WHERE username = ?", username).
-		Scan(&user.ID, &user.Username, &user.Password)
+	err := config.DB.QueryRow("SELECT id, username, password, email FROM user WHERE username = ?", username).
+		Scan(&user.ID, &user.Username, &user.Password, &user.Email)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -136,9 +204,13 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not generate token", http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+		},
 		"token": tokenString,
 	})
 }

@@ -75,7 +75,7 @@ const docTemplate = `{
         },
         "/api/users": {
             "get": {
-                "description": "Get a list of all users",
+                "description": "Get a list of all users with pagination",
                 "produces": [
                     "application/json"
                 ],
@@ -88,6 +88,18 @@ const docTemplate = `{
                         "type": "integer",
                         "description": "User ID",
                         "name": "id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of items per page",
+                        "name": "size",
                         "in": "query"
                     },
                     {
@@ -131,7 +143,7 @@ const docTemplate = `{
                 "branch_id": {
                     "type": "integer"
                 },
-                "create_date": {
+                "createDate": {
                     "type": "string"
                 },
                 "edit_by": {
@@ -171,13 +183,12 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "u_code": {
-                    "description": "คำนวณเป็น Virtual column ใน DB",
                     "type": "string"
                 },
                 "u_index": {
                     "type": "integer"
                 },
-                "update_date": {
+                "updateDate": {
                     "type": "string"
                 },
                 "user_type_id": {

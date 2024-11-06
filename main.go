@@ -25,7 +25,8 @@ func main() {
 
 	// Swagger endpoint
 	r.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
-
+	url := "http://localhost:8000/swagger/index.html"
+	log.Printf("Server started at %s", url)
 	log.Println("Server running on port 8000")
 	log.Fatal(http.ListenAndServe(":8000", r))
 }
